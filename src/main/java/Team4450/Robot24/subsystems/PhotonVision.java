@@ -19,6 +19,7 @@ import edu.wpi.first.apriltag.AprilTagFields;
 import edu.wpi.first.math.geometry.Pose2d;
 import edu.wpi.first.math.geometry.Pose3d;
 import edu.wpi.first.math.geometry.Rotation2d;
+import edu.wpi.first.math.geometry.Rotation3d;
 import edu.wpi.first.math.geometry.Transform3d;
 import edu.wpi.first.util.sendable.SendableBuilder;
 import edu.wpi.first.wpilibj.smartdashboard.Field2d;
@@ -31,23 +32,19 @@ public class PhotonVision extends SubsystemBase
     private PhotonPipelineResult    latestResult;
     private VisionLEDMode           ledMode = VisionLEDMode.kOff;
 
-    private Field2d                 field = new Field2d();
+    private Field2d field = new Field2d();
 
-    // adams code ==========
     private final AprilTagFields    fields = AprilTagFields.k2024Crescendo;
-    private AprilTagFieldLayout     fieldLayout;
+    private AprilTagFieldLayout     FIELD_LAYOUT;
     private PhotonPoseEstimator     poseEstimator;
-
-    // end adams code=============
 
 	public PhotonVision() 
 	{
-        fieldLayout = fields.loadAprilTagLayoutField();
+        FIELD_LAYOUT = fields.loadAprilTagLayoutField();
 
         // setup the AprilTag pose etimator
-        
         poseEstimator = new PhotonPoseEstimator(
-            fieldLayout,
+            FIELD_LAYOUT,
             PoseStrategy.MULTI_TAG_PNP_ON_COPROCESSOR, // strategy to use for tag to pose calculation
             camera, // the PhotonCamera
             new Transform3d() // a series of transformations from Camera pos. to robot pos. (where camera is on robot)
@@ -56,8 +53,6 @@ public class PhotonVision extends SubsystemBase
         setLedMode(ledMode);
 
 		Util.consoleLog("PhotonVision created!");
-
-        // This sim field2d shows vision estimate of robot position.
 
         SmartDashboard.putData(field);
 	}
@@ -95,7 +90,7 @@ public class PhotonVision extends SubsystemBase
         if (hasTargets()) {
             List<PhotonTrackedTarget> targets = latestResult.getTargets();
 
-            for (int i = 0; i < targets.size(); i++) {
+            for (int i=0;i<targets.size();i++) {
                 PhotonTrackedTarget target = targets.get(i);
                 if (target.getFiducialId() == id) return target;
             }
@@ -164,6 +159,14 @@ public class PhotonVision extends SubsystemBase
             return latestResult.getBestTarget().getFiducialId();
         else
             return -1;
+    }
+    /**
+     * Checks whether the id is within the valid range
+     * @param id the id you are testing
+     * @return whether or not the id is within the valid range
+     */
+    public boolean isFiducialIDValid(int id) {
+        return id >= 0 && id <= 16;
     }
 
     /**
@@ -258,7 +261,7 @@ public class PhotonVision extends SubsystemBase
      */
     public Optional<EstimatedRobotPose> getEstimatedPose() {
         Optional<EstimatedRobotPose> estimatedPoseOptional = poseEstimator.update();
-
+        
         if (estimatedPoseOptional.isPresent()) {
             EstimatedRobotPose estimatedPose = estimatedPoseOptional.get();
             Pose3d pose = estimatedPose.estimatedPose;
@@ -271,7 +274,7 @@ public class PhotonVision extends SubsystemBase
 
             // logic for checking if pose is valid would go here:
             // for example:
-            for (int i = 0; i < estimatedPose.targetsUsed.size(); i++) {
+            for (int i=0;i<estimatedPose.targetsUsed.size();i++) {
                 // if a target was used with ID > 16 then return no estimated pose
                 if (estimatedPose.targetsUsed.get(i).getFiducialId() > 16) {
                     return Optional.empty();
@@ -280,5 +283,106 @@ public class PhotonVision extends SubsystemBase
 
             return Optional.of(estimatedPose);
         } else return Optional.empty();
+    }
+    /**
+     * @return pose of best april tag target, if no april tag target exists then instead return empty
+     */
+    public Optional<Pose3d> getTagPose() {
+        if (hasTargets())
+            for (int bestTargetIndex = 0; bestTargetIndex < latestResult.getTargets().size(); bestTargetIndex++) {
+                int targetID = latestResult.getTargets().get(bestTargetIndex).getFiducialId();
+                if (isFiducialIDValid(targetID))
+                    return poseEstimator.getFieldTags().getTagPose(targetID);
+            }
+
+        return Optional.empty();
+    }
+    /**
+     * @return (if getEstimatedPose() && getTagPose() are not empty) transform from robot to best tag
+    *       <p>(else) Optional.empty();
+     */
+    public Optional<Transform3d> getRobotToTag() {
+        Optional<EstimatedRobotPose> optionalWorldPose = getEstimatedPose();
+        Optional<Pose3d> optionalTagPose = getTagPose();
+        if (optionalWorldPose.isEmpty() || optionalTagPose.isEmpty()) return Optional.empty();
+
+        Pose3d worldPose = optionalWorldPose.get().estimatedPose;
+        Pose3d tagPose = optionalTagPose.get();
+
+        Transform3d tagRelevantTransform = worldPose.minus(tagPose);
+        return Optional.of(tagRelevantTransform);
+    }
+    /**
+     * 
+     * @return
+     */
+    public Optional<Pose3d> getNotePose() {
+        Optional<EstimatedRobotPose> optionalRobotWorldPose = getEstimatedPose();
+        Optional<Transform3d> optionalNotePose = getRobotToNote();
+        if (optionalRobotWorldPose.isEmpty() || optionalNotePose.isEmpty()) return Optional.empty();
+
+        Pose3d robotWorldPose = optionalRobotWorldPose.get().estimatedPose;
+        Transform3d robotToNote = optionalNotePose.get();
+
+        //TODO: convert minus to plus
+        Transform3d noteTransform = robotWorldPose.minus(new Pose3d(robotToNote.getTranslation(),
+                                                                       robotToNote.getRotation()));
+        Pose3d notePose = new Pose3d(noteTransform.getTranslation(), noteTransform.getRotation());
+        return Optional.of(notePose);
+    }
+    /**
+     * @return
+     */
+    public Optional<Transform3d> getRobotToNote() {
+        if (hasTargets()) {
+            EstimatedRobotPose robotWorldPose = getEstimatedPose().orElse(null);
+            if (robotWorldPose == null) return Optional.empty();
+
+            double bestTargetArea = getArea();
+            // Unsure if objects size may get distorted when not looking directly at them, assuming they do not
+            // and only distory base on size. If it ends up being true, will adjust once known how.
+            double yaw = getYaw();
+
+            final double WIDTH_OF_NOTE_MM = 14 * 25.4; // inch to millimeter
+            final double CAM_FOCAL_LENGTH_MM = 50 * 10; // centimeter to millimeter
+            final int CAM_TOTAL_PIXELS = 320 * 240;
+            double pixelsTakenByNote = bestTargetArea * CAM_TOTAL_PIXELS;
+            double robotToNoteMagnitude = (WIDTH_OF_NOTE_MM * CAM_FOCAL_LENGTH_MM) / pixelsTakenByNote;
+
+            // gets a slight translation behind the robot (assuming .div works as I hope)
+            Transform3d baseTransform = new Transform3d(robotWorldPose.estimatedPose, 
+                                                        robotWorldPose.estimatedPose.div(-0.1));
+
+            double baseTransformMagnitude = Math.sqrt(Math.pow(baseTransform.getX(), 2)
+                                             + Math.pow(baseTransform.getY(), 2));
+            double magnitudeMultiplier = 1 / baseTransformMagnitude * robotToNoteMagnitude;
+            
+            double cosRadians = Math.cos(yaw);
+            double sinRadians = Math.sin(yaw);
+            double adjustedX = baseTransform.getX() * cosRadians
+                             - baseTransform.getY() * sinRadians
+                             * magnitudeMultiplier;
+            double adjustedY = baseTransform.getX() * sinRadians
+                             + baseTransform.getY() * cosRadians
+                             * magnitudeMultiplier;
+            Transform3d robotToNoteTransform = new Transform3d(adjustedX,
+                                                               adjustedY,
+                                                               0,
+                                                               new Rotation3d(0,
+                                                                              0,
+                                                                              yaw));
+
+            return Optional.of(robotToNoteTransform);
+        }
+        else
+            return Optional.empty();
+    }
+    /**
+     * converts poseEstimator.getReferencePose() to a Optional<Pose3d> so it can return empty if unknown
+     */
+    public Optional<Pose3d> getReferencePose() {
+        Pose3d referencePose = poseEstimator.getReferencePose();
+
+        return referencePose != null ? Optional.of(referencePose) : Optional.empty();
     }
 }
