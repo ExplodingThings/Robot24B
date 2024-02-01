@@ -1,18 +1,10 @@
 package Team4450.Robot24.commands;
 
-import java.util.function.Supplier;
-
-import org.photonvision.EstimatedRobotPose;
-
 import Team4450.Lib.Util;
-import Team4450.Robot24.Constants.DriveConstants;
 import Team4450.Robot24.subsystems.DriveBase;
 import Team4450.Robot24.subsystems.PhotonVision;
 import edu.wpi.first.math.controller.PIDController;
-import edu.wpi.first.math.geometry.Pose3d;
 import edu.wpi.first.math.geometry.Transform3d;
-import edu.wpi.first.math.geometry.Translation3d;
-import edu.wpi.first.wpilibj.smartdashboard.SmartDashboard;
 import edu.wpi.first.wpilibj2.command.Command;
 
 public class FollowTarget extends Command {
@@ -106,6 +98,8 @@ public class FollowTarget extends Command {
     @Override
     public void end(boolean interrupted) {
         Util.consoleLog("interrupted=%b", interrupted);
+        
+        robotDrive.driveRobotRelative(0, 0, 0);
     }
 }
 
