@@ -38,16 +38,19 @@ public class PhotonVision extends SubsystemBase
     private AprilTagFieldLayout     FIELD_LAYOUT;
     private PhotonPoseEstimator     poseEstimator;
 
-	public PhotonVision() 
+    //TODO: SET THIS TO CORRECT VALUE AND MAYBE MOVE TO CONSTANTS
+    private final Transform3d ROBOT_TO_CAM = new Transform3d();
+
+	public PhotonVision()
 	{
         FIELD_LAYOUT = fields.loadAprilTagLayoutField();
 
         // setup the AprilTag pose etimator
         poseEstimator = new PhotonPoseEstimator(
             FIELD_LAYOUT,
-            PoseStrategy.MULTI_TAG_PNP_ON_COPROCESSOR, // strategy to use for tag to pose calculation
-            camera, // the PhotonCamera
-            new Transform3d() // a series of transformations from Camera pos. to robot pos. (where camera is on robot)
+            PoseStrategy.MULTI_TAG_PNP_ON_COPROCESSOR,
+            camera,
+            ROBOT_TO_CAM
         );
 
         setLedMode(ledMode);
@@ -87,18 +90,16 @@ public class PhotonVision extends SubsystemBase
      */
     public PhotonTrackedTarget getTarget(int id)
     {
-        if (hasTargets()) {
+        if (hasTargets() && isFiducialIDValid(id)) {
             List<PhotonTrackedTarget> targets = latestResult.getTargets();
 
-            for (int i=0;i<targets.size();i++) {
+            for (int i = 0; i < targets.size(); i++) {
                 PhotonTrackedTarget target = targets.get(i);
                 if (target.getFiducialId() == id) return target;
             }
-
-            return null;
         }
-        else
-            return null;
+        
+        return null;
     }
     
     /**
@@ -106,13 +107,14 @@ public class PhotonVision extends SubsystemBase
      * 
      * @return an ArrayList of the tracked IDs
      */
-    public ArrayList<Integer> getTrackedIDs() {
+    public ArrayList<Integer> getTrackedIDs()
+    {
         ArrayList<Integer> ids = new ArrayList<Integer>();
 
         if (hasTargets()) {
             List<PhotonTrackedTarget> targets = latestResult.getTargets();
 
-            for (int i=0;i<targets.size();i++) {
+            for (int i = 0; i < targets.size(); i++) {
                 ids.add(targets.get(i).getFiducialId());
             }
         }
@@ -127,7 +129,8 @@ public class PhotonVision extends SubsystemBase
      * @param id the Fiducial ID
      * @return whether the camera sees the ID
      */
-    public boolean hasTarget(int id) {
+    public boolean hasTarget(int id)
+    {
         return getTrackedIDs().contains(id);
     }
 
@@ -149,7 +152,8 @@ public class PhotonVision extends SubsystemBase
      * @return yaw of target (tag) with fiducialID if valid and seen, area of target (other) if invalid and seen,
      *         else -1
      */
-    public double getYaw(int fiducialID) {
+    public double getYaw(int fiducialID)
+    {
         boolean validFiducialID = isFiducialIDValid(fiducialID);
 
         if (validFiducialID && hasTarget(fiducialID))
@@ -178,7 +182,8 @@ public class PhotonVision extends SubsystemBase
      * @return area of target (tag) with fiducialID if valid and seen, area of target (other) if invalid and seen,
      *         else -1
      */
-    public double getArea(int fiducialID) {
+    public double getArea(int fiducialID)
+    {
         boolean validFiducialID = isFiducialIDValid(fiducialID);
 
         if (validFiducialID && hasTarget(fiducialID))
@@ -192,7 +197,8 @@ public class PhotonVision extends SubsystemBase
         return 0;
     }
 
-    public Optional<PhotonTrackedTarget> getBestTarget(boolean hasID) {
+    public Optional<PhotonTrackedTarget> getBestTarget(boolean hasID)
+    {
         if (hasTargets())
             for (int bestTargetIndex = 0; bestTargetIndex < latestResult.getTargets().size(); bestTargetIndex++) {
                 int targetID = latestResult.getTargets().get(bestTargetIndex).getFiducialId();
@@ -220,7 +226,8 @@ public class PhotonVision extends SubsystemBase
      * @param id the id you are testing
      * @return whether or not the id is within the valid range
      */
-    public boolean isFiducialIDValid(int id) {
+    public boolean isFiducialIDValid(int id)
+    {
         return id >= 0 && id <= 16;
     }
  
@@ -301,7 +308,8 @@ public class PhotonVision extends SubsystemBase
      * 
      * @return the Optional estimated pose (empty optional means no pose or uncertain/bad pose)
      */
-    public Optional<EstimatedRobotPose> getEstimatedPose() {
+    public Optional<EstimatedRobotPose> getEstimatedPose()
+    {
         Optional<EstimatedRobotPose> estimatedPoseOptional = poseEstimator.update();
         
         if (estimatedPoseOptional.isPresent()) {
@@ -314,29 +322,44 @@ public class PhotonVision extends SubsystemBase
             // update the field2d object in NetworkTables to visualize where the camera thinks it's at
             field.setRobotPose(pose2d);
 
-            // logic for checking if pose is valid would go here:
-            // for example:
-            for (int i=0;i<estimatedPose.targetsUsed.size();i++) {
-                // if a target was used with ID > 16 then return no estimated pose
-                if (estimatedPose.targetsUsed.get(i).getFiducialId() > 16) {
+            for (int i = 0; i < estimatedPose.targetsUsed.size(); i++)
+                if (isFiducialIDValid(estimatedPose.targetsUsed.get(i).getFiducialId()))
                     return Optional.empty();
-                }
-            }
 
             return Optional.of(estimatedPose);
         } else return Optional.empty();
     }
-    /**
-     * @return pose of best april tag target, if no april tag target exists then instead return empty
-     */
-    public Optional<Pose3d> getTagPose() {
+    public Optional<Pose3d> getTagPose()
+    {
         return poseEstimator.getFieldTags().getTagPose(getBestTarget(true).get().getFiducialId());
     }
-    /**
-     * @return (if getEstimatedPose() && getTagPose() are not empty) transform from robot to best tag
-    *       <p>(else) Optional.empty();
-     */
-    public Optional<Transform3d> getRobotToTag() {
+    public Optional<Pose3d> getNotePose()
+    {
+        Optional<EstimatedRobotPose> optionalRobotWorldPose = getEstimatedPose();
+        Optional<Transform3d> optionalNotePose = getRobotToNote();
+        if (optionalRobotWorldPose.isEmpty() || optionalNotePose.isEmpty()) return Optional.empty();
+
+        Pose3d robotWorldPose = optionalRobotWorldPose.get().estimatedPose;
+        Transform3d robotToNote = optionalNotePose.get();
+        
+        Pose3d notePose = robotWorldPose.plus(robotToNote);
+        return Optional.of(notePose);
+    }
+
+    public Optional<Transform3d> robotToTarget()
+    {
+        if (hasTargets())
+            return robotToTarget(latestResult.getBestTarget());
+        else
+            return Optional.empty();
+    }
+    public Optional<Transform3d> robotToTarget(PhotonTrackedTarget target)
+    {
+        return Optional.of(target.getBestCameraToTarget().plus(ROBOT_TO_CAM.inverse()));
+    }
+    /// THESE MAY BE USELESS IF robotToTarget() (getBestCameraToTarget) works as I hope it does
+    public Optional<Transform3d> getRobotToTag()
+    {
         Optional<EstimatedRobotPose> optionalWorldPose = getEstimatedPose();
         Optional<Pose3d> optionalTagPose = getTagPose();
         if (optionalWorldPose.isEmpty() || optionalTagPose.isEmpty()) return Optional.empty();
@@ -347,28 +370,8 @@ public class PhotonVision extends SubsystemBase
         Transform3d tagRelevantTransform = worldPose.minus(tagPose);
         return Optional.of(tagRelevantTransform);
     }
-    /**
-     * 
-     * @return
-     */
-    public Optional<Pose3d> getNotePose() {
-        Optional<EstimatedRobotPose> optionalRobotWorldPose = getEstimatedPose();
-        Optional<Transform3d> optionalNotePose = getRobotToNote();
-        if (optionalRobotWorldPose.isEmpty() || optionalNotePose.isEmpty()) return Optional.empty();
-
-        Pose3d robotWorldPose = optionalRobotWorldPose.get().estimatedPose;
-        Transform3d robotToNote = optionalNotePose.get();
-        
-        //TODO: convert minus to plus
-        Transform3d noteTransform = robotWorldPose.minus(new Pose3d(robotToNote.getTranslation(),
-                                                                       robotToNote.getRotation()));
-        Pose3d notePose = new Pose3d(noteTransform.getTranslation(), noteTransform.getRotation());
-        return Optional.of(notePose);
-    }
-    /**
-     * @return
-     */
-    public Optional<Transform3d> getRobotToNote() {
+    public Optional<Transform3d> getRobotToNote()
+    {
         if (hasTargets()) {
             EstimatedRobotPose robotWorldPose = getEstimatedPose().orElse(null);
             if (robotWorldPose == null) return Optional.empty();
@@ -412,18 +415,11 @@ public class PhotonVision extends SubsystemBase
         else
             return Optional.empty();
     }
-    /**
-     * converts poseEstimator.getReferencePose() to a Optional<Pose3d> so it can return empty if unknown
-     */
-    public Optional<Pose3d> getReferencePose() {
+    
+    public Optional<Pose3d> getReferencePose()
+    {
         Pose3d referencePose = poseEstimator.getReferencePose();
 
         return referencePose != null ? Optional.of(referencePose) : Optional.empty();
-    }
-    public Optional<Transform3d> robotToTarget() {
-        if (hasTargets())
-            return Optional.of(latestResult.getBestTarget().getBestCameraToTarget().plus(new Transform3d().inverse()));
-        else
-            return Optional.empty();
     }
 }
