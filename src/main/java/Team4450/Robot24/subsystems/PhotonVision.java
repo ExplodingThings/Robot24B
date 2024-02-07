@@ -28,7 +28,7 @@ import edu.wpi.first.wpilibj2.command.SubsystemBase;
 
 public class PhotonVision extends SubsystemBase
 {
-    private PhotonCamera            camera = new PhotonCamera("4450-LL");
+    private PhotonCamera            camera;
     private PhotonPipelineResult    latestResult;
     private VisionLEDMode           ledMode = VisionLEDMode.kOff;
 
@@ -36,13 +36,17 @@ public class PhotonVision extends SubsystemBase
 
     private final AprilTagFields    fields = AprilTagFields.k2024Crescendo;
     private AprilTagFieldLayout     FIELD_LAYOUT;
-    private PhotonPoseEstimator     poseEstimator;
+    private final PhotonPoseEstimator     poseEstimator;
 
-    //TODO: SET THIS TO CORRECT VALUE AND MAYBE MOVE TO CONSTANTS
-    private final Transform3d ROBOT_TO_CAM = new Transform3d();
+    private Transform3d robotToCam;
 
-	public PhotonVision()
+    public PhotonVision(String cameraName) {
+        this(cameraName, new Transform3d());
+    }
+	public PhotonVision(String cameraName, Transform3d robotToCam)
 	{
+        camera = new PhotonCamera(cameraName);
+        this.robotToCam = robotToCam;
         FIELD_LAYOUT = fields.loadAprilTagLayoutField();
 
         // setup the AprilTag pose etimator
@@ -50,7 +54,7 @@ public class PhotonVision extends SubsystemBase
             FIELD_LAYOUT,
             PoseStrategy.MULTI_TAG_PNP_ON_COPROCESSOR,
             camera,
-            ROBOT_TO_CAM
+            robotToCam
         );
 
         setLedMode(ledMode);
@@ -121,6 +125,26 @@ public class PhotonVision extends SubsystemBase
 
         return ids;
     }
+    /**
+     * Get an array of the currently tracked valid Fiducial IDs
+     * @return whatever getTrackedIDs returns removing all invalid IDs
+     */
+    public ArrayList<Integer> getTrackedValidIDs()
+    {
+        ArrayList<Integer> ids = getTrackedIDs();
+        ids.removeIf(id -> !isFiducialIDValid(id));
+        return ids;
+    }
+    /**
+     * Get an array of the currently tracked invalid Fiducial IDs
+     * @return whatever getTrackedIDs returns removing all valid IDs
+     */
+    public ArrayList<Integer> getTrackedInvalidIDs()
+    {
+        ArrayList<Integer> ids = getTrackedIDs();
+        ids.removeIf(id -> isFiducialIDValid(id));
+        return ids;
+    }
 
     /**
      * Checks whether or not the camera currently sees a target
@@ -147,17 +171,21 @@ public class PhotonVision extends SubsystemBase
         return getYaw(latestResult.getBestTarget().getFiducialId());
     }
     /**
-     * 
+     * Returns the yaw angle of the fiducialID target if seen. 
+     * Must call hasTargets() before calling this function.
      * @param fiducialID
-     * @return yaw of target (tag) with fiducialID if valid and seen, area of target (other) if invalid and seen,
-     *         else -1
+     * @return yaw of best target (tag) with fiducialID if valid and seen,
+     * yaw of best target (other) if invalid and seen, otherwise 0.
      */
     public double getYaw(int fiducialID)
     {
         boolean validFiducialID = isFiducialIDValid(fiducialID);
 
         if (validFiducialID && hasTarget(fiducialID))
-            return getTarget(fiducialID).getYaw();
+        {
+            PhotonTrackedTarget target = getTarget(fiducialID);
+            if (target != null) return target.getYaw();
+        }
         else if (!validFiducialID && hasTargets())
         {
             PhotonTrackedTarget target = getBestTarget(false).orElse(null);
@@ -170,7 +198,7 @@ public class PhotonVision extends SubsystemBase
     /**
      * Returns the area of the best target in the latest camera results
      * list. Must call hasTargets() before calling this function.
-     * @return Best target area value.
+     * @return Best target area value. If no target exists, 0.
      */
     public double getArea()
     {
@@ -179,15 +207,18 @@ public class PhotonVision extends SubsystemBase
     /**
      * 
      * @param fiducialID
-     * @return area of target (tag) with fiducialID if valid and seen, area of target (other) if invalid and seen,
-     *         else -1
+     * @return area of best target (tag) with fiducialID if valid and seen,
+     * area of best target (other) if invalid and seen, otherwise 0.
      */
     public double getArea(int fiducialID)
     {
         boolean validFiducialID = isFiducialIDValid(fiducialID);
 
         if (validFiducialID && hasTarget(fiducialID))
-            return getTarget(fiducialID).getArea();
+        {
+            PhotonTrackedTarget target = getTarget(fiducialID);
+            if (target != null) return target.getArea();
+        }
         else if (!validFiducialID && hasTargets())
         {
             PhotonTrackedTarget target = getBestTarget(false).orElse(null);
@@ -197,6 +228,12 @@ public class PhotonVision extends SubsystemBase
         return 0;
     }
 
+    /**
+     * Get best target that either has or does not have an ID
+     * @param hasID
+     * @return optional of best valid target if hasID is true, otherwise best
+     * invalid target. If none qualify, return Optional.empty()
+     */
     public Optional<PhotonTrackedTarget> getBestTarget(boolean hasID)
     {
         if (hasTargets())
@@ -329,10 +366,19 @@ public class PhotonVision extends SubsystemBase
             return Optional.of(estimatedPose);
         } else return Optional.empty();
     }
+    /**
+     * returns the pose of the best target with a valid ID
+     * @return optional of pose of best target with valid ID
+     */
     public Optional<Pose3d> getTagPose()
     {
         return poseEstimator.getFieldTags().getTagPose(getBestTarget(true).get().getFiducialId());
     }
+    /**
+     * returns the pose of the best target with an invalid ID
+     * @return optional of pose of best target with invalid ID, or
+     * if a pose is empty Optional.empty()
+     */
     public Optional<Pose3d> getNotePose()
     {
         Optional<EstimatedRobotPose> optionalRobotWorldPose = getEstimatedPose();
@@ -346,6 +392,10 @@ public class PhotonVision extends SubsystemBase
         return Optional.of(notePose);
     }
 
+    /**
+     * returns robot to best target
+     * @return optional transform of robot to best target 
+     */
     public Optional<Transform3d> robotToTarget()
     {
         if (hasTargets())
@@ -353,9 +403,14 @@ public class PhotonVision extends SubsystemBase
         else
             return Optional.empty();
     }
+    /**
+     * returns robot to target {@code target}
+     * @param target
+     * @return optional transform of robot to {@code target}
+     */
     public Optional<Transform3d> robotToTarget(PhotonTrackedTarget target)
     {
-        return Optional.of(target.getBestCameraToTarget().plus(ROBOT_TO_CAM.inverse()));
+        return Optional.of(target.getBestCameraToTarget().plus(robotToCam.inverse()));
     }
     /// THESE MAY BE USELESS IF robotToTarget() (getBestCameraToTarget) works as I hope it does
     public Optional<Transform3d> getRobotToTag()
